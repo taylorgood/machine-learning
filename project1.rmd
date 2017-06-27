@@ -1,0 +1,161 @@
+---
+title: "Machine Learning Project 1"
+author: "T. G."
+date: "June 20, 2017"
+output: html_document
+---
+
+```{r setup, echo=TRUE}
+knitr::opts_chunk$set(echo = TRUE, cache= TRUE)
+
+require(caret)
+require(rpart)
+require(rattle)
+require(kernlab)
+
+```
+
+
+# Introduction and Background
+
+## Introduction
+From the project introduction:
+
+>Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+>The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+## Data
+
+>The training data for this project are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+>The test data are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data come from this publication:
+
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
+
+## Goal
+
+After performing initial data cleaning, three different classification models will be trained on a subset of the data from pml-training.csv and tested on the rest of the training data from that dataset. The goal is to maximize accuracy without a need for interpretation of the results, as that was not a specificed requirement. 
+
+# Data Import and Cleaning
+
+## Import
+
+Import the data using the basic R command, while also doing preliminary cleaning by labeling specific values as N/A.
+
+```{r import}
+
+rawTrainingData <- read.csv("Data/pml-training.csv", na.strings = c("NA", "", "#DIV/0!"))
+rawTestData <- read.csv("Data/pml-testing.csv", na.strings = c("NA", "", "#DIV/0!"))
+
+```
+
+## Data Cleaning
+
+Any data cleaning performed mut be performed identially to both the testing and training data.
+
+### Remove PII & Non-contributing data
+
+The first seven columns are row number, username, datetime, and diagnostic data. Removing these will not impact predictive power, increases data security by removing what may be considered PII, and lessens the amount of computations the system will have to perform.
+
+```{r dc1}
+noPIITraining <- rawTrainingData[-c(1:7)]
+noPIITest <- rawTestData[-c(1:7)]
+
+```
+
+### Remove columns where all data is missing
+
+With any sort of collected data, there is the possibility of data corruption, mis-entry, or other flaws in the data. When examining the training data, there is a non-negligible number of columns with missing data. These must be removed in order to properly train the machine models.
+
+```{r dc2}
+
+noBadCTraining <- noPIITraining[,sapply(noPIITraining, function(x)any(is.na(x))) == FALSE]
+noBadCTesting <- noPIITest[,sapply(noPIITraining, function(x)any(is.na(x))) == FALSE]
+
+```
+
+
+
+### Data Splitting
+
+In order to properly create models based on machine learning algorithms, one must split the input data into a "training" set and a "testing" set. This testing set is distinct from the imported testing set. A random sample of 70% is taken from the noBadCTraining set and made into a "finalTraining" set. The other 30% is assigned to a "finalTesting" set.
+
+R generated the random number 28563 that will be used to seed the rest of the random number generators to ensure repeatable results.
+
+```{r ds}
+set.seed(28563)
+
+trainPart <- createDataPartition(noBadCTraining$classe, p = 0.7, list = FALSE)
+
+finalTraining <- noBadCTraining[trainPart,]
+finalTesting <- noBadCTraining[-trainPart,]
+
+
+```
+
+## Model Creation
+
+Models were selected from the broader library of classification algorithms that were covered within the course. Random Trees was chosen specifically so that the researcher could investigate SVM in different basis. K-fold cross-validation is left to the parameter default of 10. Model 3 has parallel processing enabled for better time efficiency, which may cause issues with reproducibility due to the interaction of setting the seed with parallelization. 
+
+### 1. CART Model - RPart in Caret
+
+First examined is the typical classification tree implemented through RPart in caret. 
+
+```{r m1}
+treeModel <- train(classe ~., data=finalTraining, method = "rpart")
+
+treePredict <- predict(treeModel, finalTesting)
+confTree <- confusionMatrix(finalTesting$classe, treePredict)
+print(confTree)
+
+```
+
+Accuracy is `as.numeric(confTree$overall[1]`, which results in a `1 - as.numeric(confTree$overall[1])` out-of-sample error. This is not ideal. This does make a pretty picture, though.
+
+```{r m1plot}
+fancyRpartPlot(treeModel$finalModel)
+
+```
+
+
+### 2. GBM Model - gbm in Caret
+
+A gradient boosting machine model is explored as a second option. This is implemented through the gbm package.
+
+```{r m2}
+gbmModel <- train(classe ~., data=finalTraining, method = "gbm", verbose = FALSE)
+print(gbmModel)
+
+gbmPredict <- predict(gbmModel, finalTesting)
+confGBM <- confusionMatrix(finalTesting$classe, gbmPredict)
+print(confGBM)
+
+```
+
+Accuracy is `as.numeric(confGBM$overall[1]`, which results in a `1 - as.numeric(confGBM$overall[1])` out-of-sample error. While this is high, a third model could achieve higher accuracy.
+
+### 3. Support Vector Machine Model with Polynomial Basis - kernlab in caret
+
+Support Vector Machine Model using a polynomial basis is explored as a third model. A linear basis model was tested but performed worse than this model, and is not suitable for inclusion. The known drawback to this model is that the computational power required to run this model is significant. Runtime was around 8 hours. This is due to the fact that the polynomial basis is computationally more demanding.
+
+```{r m3}
+polysvmModel <-train(classe ~., data=finalTraining, method = "svmPoly", allowParallel = TRUE)
+print(polysvmModel)
+svmPredict <- predict(polysvmModel, finalTesting)
+confSVM <- confusionMatrix(finalTesting$classe, svmPredict)
+print(confSVM)
+
+```
+
+Accuracy is `as.numeric(confSVM$overall[1]`, which results in a `1 - as.numeric(confSVM$overall[1])` out-of-sample error. This is the most accurate model, but it is unclear whether the additional computational time required justifies the use of this model.
+
+## Prediction
+
+```{r answer}
+answers <- predict(polysvmModel, noBadCTesting)
+print(answers)
+
+```
